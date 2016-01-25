@@ -1,0 +1,96 @@
+---
+title: "Human Activity Recognization"
+author: "dyang"
+date: "January 24, 2016"
+output: html_document
+---
+
+##Abstract
+The report analyzes the data collected from body sensors of 6 participants, and tries to predict the manner in which they did the exercise using machine learning algorithms.
+
+
+## Data Processing 
+### Load the Raw Data from CSV file and prin the summary of the data
+```{r loadData, cache=TRUE, results="hide"}
+#options( stringsAsFactors=F )
+pml_training <- read.csv("pml-training.csv", header = TRUE, na.strings = c("NA","NaN", " ", ""), stringsAsFactors = FALSE)
+pml_testing <- read.csv("pml-testing.csv", header = TRUE, na.strings = c("NA","NaN", " ", ""), stringsAsFactors = FALSE)
+## summary of the data
+str(pml_training)
+```
+
+### Preprocessing the data
+Remove columns that have most of the fields missing.  Convert certain fields from String to factors, including user_name
+```{r pre-processing data, results="hide", }
+library(YaleToolkit)
+library(caret)
+summa <- whatis(pml_training)
+# Find columns that have no data missing
+columnNames <- summa[summa$missing == 0, 1]
+# Remove the first 7 columns as they are not tied to the data
+trainingCols <- as.character(columnNames[c(8:length(columnNames))])
+testingCols <- as.character(columnNames[c(8: (length(columnNames)-1))])
+tidy_training <- pml_training[, trainingCols]
+tidy_testing <- pml_testing[, testingCols]
+# Covert the output to a factor
+tidy_training$classe <- factor(tidy_training$classe)
+```
+
+### Data Slicing
+```{r cross validation}
+library(AppliedPredictiveModeling)
+library(caret)
+set.seed(1000)
+inTrain = createDataPartition(tidy_training$classe, p = 0.75, list=FALSE)
+training = tidy_training[ inTrain,]
+validation = tidy_training[-inTrain,]
+
+```
+Regarding cross-validation, the caret::train method is doing cross validation behind hte scene, so there is no need to specific the cross validation approach, unless user wants to change the default cross validaiton method. But the original training set is spit into training and validation at a 75% traning sample rate, as we need validation to evaluate the "Out of Sample Error".
+
+## Training with Cross Validation and Test
+This is a calssification effort.  Since all the variables are numeric yet the outcome is a factor, It is impossible to use the linear model directly. And the output is a factor with 5 levels, which means that "glm" model does not work either.  So the selection is on classification and regression tree models.
+
+###Initial prediction with Trees 
+```{r training rpart}
+modelFitTree <- train(training$classe ~ ., method = "rpart", data=training)
+confusionMatrix(predict(modelFitTree, validation), validation$classe)
+
+```
+The result is poor. The overall Accuracy is only 50% on the cross validation set.  It is not acceptable.
+
+###Random Forest method with Cross Validation Configuration. 
+Due to the high data volume, a cluster is set up to support parallel processing.  Also, since the training has large amount of data, the number of folders/resampling does not need to be high like 10/25.  The training here only use four.  
+
+```{r training rf}
+library(parallel)
+library(doParallel)
+# convention to leave 1 core for OS
+cluster <- makeCluster(detectCores() - 1) 
+registerDoParallel(cluster)
+# Only take 4 times of resampling in cross validation
+control <- trainControl(method="boot", number=4, repeats=4, allowParallel = TRUE)
+modelFitRF <- train(training$classe ~ ., method = "rf", data=training, trControl=control)
+save(modelFitRF, file = "modelFitRF4.rda")
+stopCluster(cluster)
+#load("modelFitRF4.rda")
+confusionMatrix(predict(modelFitRF, validation), validation$classe)
+
+```
+Random forest reached a result with an overall accuracy of over 99% in the validation set.  The result looks great.  Now use the generated model to predict the testing set.
+
+
+## Predict the testing set.
+```{r predict}
+
+result <- predict(modelFitRF, tidy_testing)
+print(result)
+```
+
+
+## Conclusion
+Random Forest Prediction reaches a satisfactory result.
+
+
+
+
